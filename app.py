@@ -3,6 +3,8 @@ import argparse
 from pathlib import Path
 
 from src.audit import AuditRecorder
+from src.channel_repository import ChannelRepository
+from src.channel_service import ChannelService
 from src.http_api import create_server
 from src.repository import Repository
 from src.rules import DomainRules
@@ -17,7 +19,8 @@ DEFAULT_PORT = 8321
 def build_service(db_path: str) -> Service:
     repository = Repository(db_path)
     audit = AuditRecorder(repository)
-    return Service(repository, DomainRules(), audit)
+    channel = ChannelService(ChannelRepository(db_path))
+    return Service(repository, DomainRules(), audit, channel)
 
 
 def parse_args():

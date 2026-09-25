@@ -8,10 +8,11 @@ from .rules import DomainRules
 
 
 class Service:
-    def __init__(self, repository: Repository, rules: DomainRules, audit: AuditRecorder = None) -> None:
+    def __init__(self, repository: Repository, rules: DomainRules, audit: AuditRecorder = None, channel=None) -> None:
         self.repository = repository
         self.rules = rules
         self.audit = audit or AuditRecorder(repository)
+        self.channel = channel
 
     @staticmethod
     def _actor(actor: Actor) -> Actor:
@@ -51,8 +52,10 @@ class Service:
             raise PermissionDenied("角色无权执行该操作")
         record = self.repository.get(record_id)
         self.rules.require_transition(record, action)
+        if action == "berth" and self.channel is not None:
+            self.channel.require_confirmed_window(record["reference"])
         new_state, new_payload, summary = self.rules.apply_action(record, action, data or {})
-        return self.repository.mutate(
+        result = self.repository.mutate(
             record_id=record_id,
             expected_version=int(expected_version),
             state=new_state,
@@ -61,6 +64,9 @@ class Service:
             action=action,
             details={"summary": summary, "input": data or {}, "from": record["state"], "to": new_state},
         )
+        if action == "depart" and self.channel is not None:
+            self.channel.release_by_reference(record["reference"], actor.user_id)
+        return result
 
     def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
         actor = self._actor(actor)

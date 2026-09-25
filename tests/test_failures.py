@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app import build_service
 from src.domain import Actor, Conflict, PermissionDenied
+from tests.test_workflow import confirm_channel_window
 
 
 CREATE_DATA = {'vessel': 'HaiYun', 'berth': 'B12', 'vessel_length_m': 180, 'berth_length_m': 220, 'draft_m': 10.2, 'berth_depth_m': 11.5, 'eta_hour': 6, 'etd_hour': 18, 'risk_level': 'medium', 'dangerous_goods': False, 'dangerous_class': ''}
@@ -27,6 +28,7 @@ class FailureTest(unittest.TestCase):
 
     def test_stale_version_is_rejected(self):
         record = self.service.create(Actor("creator", "port_controller"), "VOY-21001", CREATE_DATA)
+        confirm_channel_window(self.service, "VOY-21001")
         first = FLOW[0]
         record = self.service.act(Actor("operator", first[1]), record["id"], record["version"], first[0], first[2])
         second = FLOW[1]

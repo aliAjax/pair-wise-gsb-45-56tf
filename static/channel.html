@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>潮汐通航台</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
+    main { max-width: 1080px; margin: auto; }
+    section { border: 1px solid #dde3ea; border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 0; }
+    h3 { font-size: 1rem; }
+    label { display: inline-block; margin: .25rem .8rem .25rem 0; font-size: .9rem; }
+    input, select { padding: .3rem .4rem; }
+    button { padding: .45rem .9rem; cursor: pointer; }
+    table { border-collapse: collapse; width: 100%; font-size: .88rem; margin-bottom: .8rem; }
+    th, td { border: 1px solid #e1e6ec; padding: .3rem .5rem; text-align: left; }
+    th { background: #f4f6f8; }
+    tr.busy { background: #dbeafe; }
+    tr.buffer { background: #fde8e8; }
+    .bad { color: #b91c1c; }
+    .ok { color: #047857; }
+    pre { background: #f4f6f8; padding: .8rem; overflow: auto; border-radius: 8px; font-size: .82rem; }
+    #message { min-height: 1.2em; margin: .4rem 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>潮汐通航台</h1>
+  <p><a href="/">返回泊位计划页</a>。航道同一时间一艘船，危险品船前后各留一小时；水深不够或时段撞上时自动排到当天最近的可走窗口，排不上进入候泊名单并写明原因。</p>
+  <div id="message"></div>
+
+  <section>
+    <h2>潮位资料</h2>
+    <div>
+      <label>日期 <input type="date" id="tideDate"></label>
+      <label>航道基准水深(米) <input type="number" id="channelDepth" value="12" step="0.1" min="1" max="30" style="width:5rem"></label>
+    </div>
+    <div>
+      <label>逐小时潮位(0-23时，逗号分隔)<br>
+        <input id="heights" size="72" placeholder="共24个数，例如 0,0.2,0.5,0.8,...">
+      </label>
+      <button id="fillZero">填入平潮0</button>
+    </div>
+    <button id="saveTide">保存潮位</button>
+    <button id="loadTide">读取潮位</button>
+    <pre id="tideView">尚未读取潮位。</pre>
+  </section>
+
+  <section>
+    <h2>通航申请</h2>
+    <div>
+      <label>航次号 <input id="reqRef" placeholder="VOY-21001"></label>
+      <label>船名 <input id="reqVessel" placeholder="HaiYun"></label>
+      <label>吃水(米) <input id="reqDraft" type="number" step="0.1" min="0.1" max="30" style="width:5rem"></label>
+    </div>
+    <div>
+      <label>日期 <input type="date" id="reqDate"></label>
+      <label>预计过闸时刻(时) <input id="reqHour" type="number" min="0" max="23" value="6" style="width:4rem"></label>
+      <label>占用时长(小时) <input id="reqDuration" type="number" min="1" max="6" value="1" style="width:4rem"></label>
+      <label>危险品类别
+        <select id="reqDanger">
+          <option value="">非危险品</option>
+          <option>爆炸品</option>
+          <option>易燃气体</option>
+          <option>易燃液体</option>
+          <option>毒害品</option>
+          <option>腐蚀品</option>
+          <option>放射性物品</option>
+        </select>
+      </label>
+      <button id="submitRequest">提交申请并排班</button>
+    </div>
+    <pre id="requestResult"></pre>
+  </section>
+
+  <section>
+    <h2>通航台</h2>
+    <label>日期 <input type="date" id="boardDate"></label>
+    <button id="loadBoard">刷新通航台</button>
+    <div id="boardWrap"></div>
+    <h3>候泊名单</h3>
+    <div id="waitingWrap">暂无候泊船舶。</div>
+  </section>
+</main>
+<script>
+const headers = {"X-User-Id":"dispatcher","X-Role":"port_controller","X-Org":"demo"};
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const today = new Date().toISOString().slice(0, 10);
+["tideDate", "reqDate", "boardDate"].forEach(id => { $(id).value = today; });
+
+async function api(path, method = "GET", body = null) {
+  const options = {method, headers: Object.assign({}, headers)};
+  if (body) {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.message || ("请求失败 " + response.status));
+  return data;
+}
+
+function showMessage(text, ok = true) {
+  const el = $("message");
+  el.textContent = text;
+  el.className = ok ? "ok" : "bad";
+}
+
+function parseHeights() {
+  const parts = $("heights").value.split(",").map(s => s.trim()).filter(s => s !== "");
+  if (parts.length !== 24) throw new Error("需要24个小时的潮位，当前为" + parts.length + "个");
+  const values = parts.map(Number);
+  if (values.some(v => !isFinite(v))) throw new Error("潮位必须是数字");
+  return values;
+}
+
+$("fillZero").onclick = () => { $("heights").value = Array(24).fill("0").join(","); };
+
+$("saveTide").onclick = async () => {
+  try {
+    const tide = await api("/api/tides", "POST", {
+      date: $("tideDate").value,
+      channel_depth_m: Number($("channelDepth").value),
+      heights: parseHeights()
+    });
+    renderTide(tide);
+    showMessage("潮位已保存：" + tide.date);
+  } catch (e) { showMessage(e.message, false); }
+};
+
+$("loadTide").onclick = async () => {
+  try {
+    renderTide(await api("/api/tides?date=" + $("tideDate").value));
+    showMessage("已读取潮位");
+  } catch (e) { showMessage(e.message, false); }
+};
+
+function renderTide(tide) {
+  const depths = tide.depths || tide.heights.map(h => +(tide.channel_depth_m + h).toFixed(2));
+  $("tideView").textContent = "日期 " + tide.date + "，基准水深 " + tide.channel_depth_m + " 米\n"
+    + tide.heights.map((h, i) => String(i).padStart(2, "0") + "时  潮位 " + h.toFixed(2) + "  水深 " + depths[i].toFixed(2)).join("\n");
+}
+
+$("submitRequest").onclick = async () => {
+  try {
+    const booking = await api("/api/channel/requests", "POST", {
+      reference: $("reqRef").value,
+      vessel: $("reqVessel").value,
+      draft_m: Number($("reqDraft").value),
+      date: $("reqDate").value,
+      desired_hour: Number($("reqHour").value),
+      duration_hours: Number($("reqDuration").value),
+      dangerous_class: $("reqDanger").value
+    });
+    if (booking.state === "waiting") {
+      $("requestResult").textContent = "进入候泊名单：" + booking.wait_reason;
+    } else {
+      $("requestResult").textContent = "已排班 " + booking.start_hour + ":00-" + booking.end_hour + ":00，待调度员确认窗口。";
+    }
+    loadBoard();
+  } catch (e) { showMessage(e.message, false); }
+};
+
+async function bookingAction(id, version, action) {
+  try {
+    await api("/api/channel/bookings/" + id + "/actions/" + action, "POST", {expected_version: version});
+    showMessage(action === "confirm" ? "窗口已确认" : "航道已释放");
+    loadBoard();
+  } catch (e) { showMessage(e.message, false); }
+}
+
+async function loadBoard() {
+  try {
+    renderBoard(await api("/api/channel/board?date=" + $("boardDate").value));
+  } catch (e) { showMessage(e.message, false); }
+}
+
+function renderBoard(board) {
+  const occ = {};
+  for (const b of board.bookings) {
+    if (b.state !== "scheduled" && b.state !== "confirmed") continue;
+    const label = b.vessel + (b.dangerous_class ? "(" + b.dangerous_class + ")" : "");
+    for (let h = b.start_hour; h < b.end_hour; h++) occ[h] = {type: "busy", label};
+    if (b.dangerous_class) {
+      for (const h of [b.start_hour - 1, b.end_hour]) {
+        if (h >= 0 && h < 24 && !occ[h]) occ[h] = {type: "buffer", label: "危险品隔离"};
+      }
+    }
+  }
+  let rows = "";
+  for (let h = 0; h < 24; h++) {
+    const mark = occ[h];
+    const tideH = board.tide ? board.tide.heights[h] : null;
+    const depth = board.tide ? board.tide.depths[h] : null;
+    rows += '<tr class="' + (mark ? mark.type : "") + '"><td>' + String(h).padStart(2, "0") + ":00</td>"
+      + "<td>" + (tideH === null ? "-" : tideH.toFixed(2)) + "</td>"
+      + "<td>" + (depth === null ? "-" : depth.toFixed(2)) + "</td>"
+      + "<td>" + (mark ? esc(mark.label) : "空闲") + "</td></tr>";
+  }
+  let html = "<table><tr><th>时刻</th><th>潮位(米)</th><th>水深(米)</th><th>航道</th></tr>" + rows + "</table>";
+  html += "<h3>排班记录</h3>";
+  if (!board.bookings.length) {
+    html += "<p>暂无排班。</p>";
+  } else {
+    html += "<table><tr><th>航次</th><th>船名</th><th>吃水(米)</th><th>窗口</th><th>危险品</th><th>状态</th><th>操作</th></tr>";
+    const stateText = {scheduled: "待确认", confirmed: "已确认", released: "已释放"};
+    for (const b of board.bookings) {
+      let actions = "";
+      if (b.state === "scheduled") {
+        actions = '<button onclick="bookingAction(' + b.id + "," + b.version + ",'confirm')\">确认窗口</button> "
+          + '<button onclick="bookingAction(' + b.id + "," + b.version + ",'release')\">释放</button>";
+      } else if (b.state === "confirmed") {
+        actions = '<button onclick="bookingAction(' + b.id + "," + b.version + ",'release')\">释放航道</button>";
+      }
+      html += "<tr><td>" + esc(b.reference) + "</td><td>" + esc(b.vessel) + "</td><td>" + b.draft_m + "</td>"
+        + "<td>" + (b.start_hour === null ? "-" : b.start_hour + ":00-" + b.end_hour + ":00") + "</td>"
+        + "<td>" + (esc(b.dangerous_class) || "无") + "</td><td>" + (stateText[b.state] || esc(b.state)) + "</td>"
+        + "<td>" + actions + "</td></tr>";
+    }
+    html += "</table>";
+  }
+  $("boardWrap").innerHTML = html;
+  if (!board.waiting.length) {
+    $("waitingWrap").textContent = "暂无候泊船舶。";
+  } else {
+    $("waitingWrap").innerHTML = "<ul>" + board.waiting.map(w =>
+      '<li class="bad">' + esc(w.reference) + " " + esc(w.vessel)
+      + "（吃水" + w.draft_m + "米，预计" + w.desired_hour + "时）：" + esc(w.wait_reason) + "</li>"
+    ).join("") + "</ul>";
+  }
+}
+
+$("loadBoard").onclick = loadBoard;
+loadBoard();
+</script>
+</body>
+</html>

@@ -6,12 +6,15 @@ from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
-from .domain import Actor, DomainError, PermissionDenied, ValidationError
+from .domain import Actor, DomainError, NotFound, PermissionDenied, ValidationError
 
 
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+CHANNEL_BOOKING_RE = re.compile(r"^/api/channel/bookings/(\d+)$")
+CHANNEL_ACTION_RE = re.compile(r"^/api/channel/bookings/(\d+)/actions/([a-z_]+)$")
+CHANNEL_ACTIONS = {"confirm", "release"}
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -27,6 +30,12 @@ def make_handler(service: Any, static_dir: Path):
             if not user_id or not role:
                 raise PermissionDenied("缺少X-User-Id或X-Role")
             return Actor(user_id=user_id, role=role, organization=self.headers.get("X-Org", ""))
+
+        def _channel(self):
+            channel = getattr(service, "channel", None)
+            if channel is None:
+                raise NotFound("潮汐通航台未启用")
+            return channel
 
         def _body(self) -> Dict[str, Any]:
             try:
@@ -71,6 +80,25 @@ def make_handler(service: Any, static_dir: Path):
                     page = (static_dir / "index.html").read_bytes()
                     self._send(200, page, "text/html; charset=utf-8")
                     return
+                if parsed.path == "/channel":
+                    page = (static_dir / "channel.html").read_bytes()
+                    self._send(200, page, "text/html; charset=utf-8")
+                    return
+                if parsed.path == "/api/tides":
+                    query = parse_qs(parsed.query)
+                    self._send(200, self._channel().get_tide(self._actor(), query.get("date", [""])[0]))
+                    return
+                if parsed.path == "/api/channel/board":
+                    query = parse_qs(parsed.query)
+                    self._send(200, self._channel().board(self._actor(), query.get("date", [""])[0]))
+                    return
+                if parsed.path == "/api/channel/waiting":
+                    self._send(200, {"items": self._channel().waiting(self._actor())})
+                    return
+                match = CHANNEL_BOOKING_RE.match(parsed.path)
+                if match:
+                    self._send(200, self._channel().get_booking(self._actor(), int(match.group(1))))
+                    return
                 if parsed.path == "/api/records":
                     query = parse_qs(parsed.query)
                     records = service.list_records(self._actor(), state=query.get("state", [None])[0], limit=int(query.get("limit", ["100"])[0]))
@@ -98,6 +126,23 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/tides":
+                    self._send(200, self._channel().save_tide(self._actor(), body))
+                    return
+                if parsed.path == "/api/channel/requests":
+                    self._send(201, self._channel().request_transit(self._actor(), body))
+                    return
+                match = CHANNEL_ACTION_RE.match(parsed.path)
+                if match:
+                    action = match.group(2)
+                    if action not in CHANNEL_ACTIONS:
+                        raise ValidationError("未知操作")
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    booking = self._channel().act(self._actor(), int(match.group(1)), version, action)
+                    self._send(200, booking)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:
