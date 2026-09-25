@@ -2,6 +2,7 @@
 import argparse
 from pathlib import Path
 
+from src import tides
 from src.audit import AuditRecorder
 from src.http_api import create_server
 from src.repository import Repository
@@ -17,7 +18,7 @@ DEFAULT_PORT = 8321
 def build_service(db_path: str) -> Service:
     repository = Repository(db_path)
     audit = AuditRecorder(repository)
-    return Service(repository, DomainRules(), audit)
+    return Service(repository, DomainRules(), audit, tide_provider=tides.default_table)
 
 
 def parse_args():

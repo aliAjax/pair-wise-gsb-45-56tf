@@ -3,31 +3,301 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>港口泊位与航道调度</title>
+  <title>潮汐通航台 · 港口泊位与航道调度</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.5rem; color: #17212b; }
+    main { max-width: 1080px; margin: auto; }
+    h1 { font-size: 1.4rem; margin-bottom: .2rem; }
+    h2 { font-size: 1.05rem; margin-top: 1.6rem; border-bottom: 2px solid #dbe3ea; padding-bottom: .3rem; }
+    table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+    th, td { border: 1px solid #d5dde4; padding: .3rem .45rem; text-align: left; }
+    th { background: #eef2f6; }
+    button { padding: .3rem .6rem; cursor: pointer; font-size: .8rem; margin-right: .3rem; }
+    input, select { padding: .25rem; font-size: .85rem; }
+    .row { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
+    .tide-chart { display: flex; gap: 2px; align-items: flex-end; height: 150px; margin-top: .6rem; }
+    .tide-cell { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; font-size: .6rem; color: #445; min-width: 0; }
+    .tide-bar { width: 100%; border-radius: 2px 2px 0 0; background: #9fb6c9; }
+    .tide-bar.ok { background: #2e9e5b; }
+    .channel-row { display: flex; gap: 2px; margin-top: 4px; }
+    .channel-cell { flex: 1; text-align: center; font-size: .6rem; padding: .2rem 0; border-radius: 2px; background: #e8edf1; color: #667; overflow: hidden; white-space: nowrap; }
+    .channel-cell.busy { background: #2764ac; color: #fff; }
+    .channel-cell.buffer { background: #e8a13d; color: #fff; }
+    .danger { color: #b03030; font-weight: 600; }
+    .muted { color: #6a7683; font-size: .8rem; }
+    #message { background: #f4f6f8; padding: .6rem; border-radius: 6px; min-height: 1.2rem; white-space: pre-wrap; font-size: .85rem; }
+    form .row { margin-bottom: .4rem; }
+    label { font-size: .8rem; color: #33414e; display: flex; flex-direction: column; gap: .15rem; }
   </style>
 </head>
 <body>
 <main>
-  <h1>港口泊位与航道调度</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>潮汐通航台</h1>
+  <p class="muted">航道同一时间一艘船，危险品船前后各留一小时；水深不足或时段冲突时自动调整至当天最近可走窗口，排不上进入候泊名单。调度员确认窗口后才能靠泊，离港即释放航道。</p>
+
+  <h2>潮位与航道水深</h2>
+  <div class="row">
+    <span id="tide-meta"></span>
+    <label style="flex-direction:row;align-items:center;gap:.3rem">核算吃水(米) <input id="draft-input" type="number" step="0.1" min="0" value="10.2" style="width:5rem"></label>
+    <span id="navigable" class="muted"></span>
+  </div>
+  <div id="tide-chart" class="tide-chart"></div>
+  <div id="channel-row" class="channel-row"></div>
+
+  <h2>航道占用</h2>
+  <table id="bookings-table">
+    <thead><tr><th>过闸窗口</th><th>隔离区</th><th>船名</th><th>航次</th><th>状态</th><th>危险品</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>候泊名单</h2>
+  <table id="waiting-table">
+    <thead><tr><th>船名</th><th>航次</th><th>申请过闸</th><th>吃水(米)</th><th>候泊原因</th><th>操作</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>计划列表</h2>
+  <table id="records-table">
+    <thead><tr><th>ID</th><th>航次</th><th>船名</th><th>泊位</th><th>吃水(米)</th><th>申请过闸</th><th>过闸窗口</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>新建计划</h2>
+  <form id="create-form">
+    <div class="row">
+      <label>航次 <input id="f-reference" required value="VOY-1001"></label>
+      <label>船名 <input id="f-vessel" required value="HaiYun"></label>
+      <label>泊位 <input id="f-berth" required value="B12"></label>
+      <label>船长(米) <input id="f-vlen" type="number" required value="180"></label>
+      <label>泊位长度(米) <input id="f-blen" type="number" required value="220"></label>
+    </div>
+    <div class="row">
+      <label>吃水(米) <input id="f-draft" type="number" step="0.1" required value="10.2"></label>
+      <label>泊位水深(米) <input id="f-bdepth" type="number" step="0.1" required value="11.5"></label>
+      <label>预计到港(时) <input id="f-eta" type="number" min="0" max="23" required value="6"></label>
+      <label>预计离港(时) <input id="f-etd" type="number" min="1" max="24" required value="18"></label>
+      <label>预计过闸(时) <input id="f-transit" type="number" min="0" max="23" required value="6"></label>
+    </div>
+    <div class="row">
+      <label>风险等级
+        <select id="f-risk"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select>
+      </label>
+      <label style="flex-direction:row;align-items:center;gap:.3rem"><input id="f-dangerous" type="checkbox" style="width:auto"> 危险品船</label>
+      <label>危险品类别 <input id="f-dclass" placeholder="如 3类易燃液体"></label>
+      <button type="submit">创建计划</button>
+    </div>
+  </form>
+
+  <pre id="message"></pre>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
+const headers = {"X-User-Id": "dispatcher-1", "X-Role": "port_controller", "X-Org": "demo"};
+const STATE_LABELS = {draft: "草稿", confirmed: "已确认", scheduled: "已排窗", waiting: "候泊中", window_confirmed: "窗口已确认", berthed: "已靠泊", departed: "已离港", cancelled: "已取消"};
+let board = null;
+let records = [];
+
+const fmtHour = h => String(h).padStart(2, "0") + ":00";
+const fmtWindow = (s, e) => fmtHour(s) + "-" + fmtHour(e);
+
+async function api(path, options) {
+  const opts = Object.assign({headers: Object.assign({"Content-Type": "application/json"}, headers)}, options || {});
+  const response = await fetch(path, opts);
   const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  if (!response.ok) throw new Error(data.message || "请求失败");
+  return data;
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+
+function showMessage(text) { document.getElementById("message").textContent = text; }
+
+async function refresh() {
+  board = await api("/api/channel");
+  const list = await api("/api/records?limit=50");
+  records = list.items;
+  renderTides();
+  renderBookings();
+  renderWaiting();
+  renderRecords();
+}
+
+function requiredDepth() {
+  const draft = parseFloat(document.getElementById("draft-input").value);
+  return isNaN(draft) ? null : draft + board.ukc_required_m;
+}
+
+function renderTides() {
+  document.getElementById("tide-meta").textContent =
+    "日期 " + board.date + " · 基准水深 " + board.channel_base_depth_m + "m · 富余水深 " + board.ukc_required_m + "m";
+  const required = requiredDepth();
+  const chart = document.getElementById("tide-chart");
+  chart.innerHTML = "";
+  const maxDepth = Math.max.apply(null, board.hours.map(h => h.depth_m).concat([required || 0]));
+  board.hours.forEach(h => {
+    const ok = required !== null && h.depth_m >= required;
+    const cell = document.createElement("div");
+    cell.className = "tide-cell";
+    const bar = document.createElement("div");
+    bar.className = "tide-bar" + (ok ? " ok" : "");
+    bar.style.height = Math.max(4, Math.round(h.depth_m / maxDepth * 110)) + "px";
+    bar.title = fmtHour(h.hour) + " 潮位" + h.tide_m + "m 水深" + h.depth_m + "m";
+    const depth = document.createElement("span");
+    depth.textContent = h.depth_m.toFixed(1);
+    const hour = document.createElement("span");
+    hour.textContent = h.hour;
+    cell.appendChild(bar); cell.appendChild(depth); cell.appendChild(hour);
+    chart.appendChild(cell);
+  });
+  document.getElementById("navigable").textContent = required === null ? "" :
+    "所需水深 " + required.toFixed(1) + "m，可走时段：" +
+    (board.hours.filter(h => h.depth_m >= required).map(h => fmtHour(h.hour)).join("、") || "无");
+  const row = document.getElementById("channel-row");
+  row.innerHTML = "";
+  for (let hour = 0; hour < 24; hour++) {
+    const cell = document.createElement("div");
+    cell.className = "channel-cell";
+    let label = "";
+    for (const b of board.bookings) {
+      if (hour >= b.start_hour && hour < b.end_hour) { cell.classList.add("busy"); label = b.vessel; break; }
+      if (hour >= b.blocked_start && hour < b.blocked_end) { cell.classList.add("buffer"); label = "隔离"; }
+    }
+    cell.textContent = hour + (label ? " " + label : "");
+    cell.title = label || "空闲";
+    row.appendChild(cell);
+  }
+}
+
+function renderBookings() {
+  const tbody = document.querySelector("#bookings-table tbody");
+  tbody.innerHTML = "";
+  if (!board.bookings.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">航道空闲</td></tr>';
+    return;
+  }
+  board.bookings.forEach(b => {
+    const tr = document.createElement("tr");
+    const blocked = (b.blocked_start !== b.start_hour || b.blocked_end !== b.end_hour) ? fmtWindow(b.blocked_start, b.blocked_end) : "—";
+    tr.innerHTML = "<td>" + fmtWindow(b.start_hour, b.end_hour) + "</td><td>" + blocked + "</td><td>" + b.vessel +
+      "</td><td>" + b.reference + "</td><td>" + (STATE_LABELS[b.state] || b.state) + "</td><td>" +
+      (b.dangerous ? '<span class="danger">' + (b.dangerous_class || "是") + "</span>" : "否") + "</td>";
+    tbody.appendChild(tr);
+  });
+}
+
+function renderWaiting() {
+  const tbody = document.querySelector("#waiting-table tbody");
+  tbody.innerHTML = "";
+  if (!board.waiting.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">候泊名单为空</td></tr>';
+    return;
+  }
+  board.waiting.forEach(w => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + w.vessel + "</td><td>" + w.reference + "</td><td>" + fmtHour(w.transit_hour) +
+      "</td><td>" + w.draft_m + "</td><td>" + w.waiting_reason + "</td>";
+    const td = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.textContent = "重新排班";
+    btn.onclick = () => act(w.record_id, w.version, "schedule", {});
+    td.appendChild(btn);
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  });
+}
+
+const ACTIONS = {
+  draft: [
+    {action: "confirm", label: "确认引航", data: () => promptValue("引航员ID", "P-01", v => ({pilot_id: v}))},
+    {action: "cancel", label: "取消", data: () => promptValue("取消原因", "计划调整", v => ({cancel_reason: v}))},
+  ],
+  confirmed: [
+    {action: "schedule", label: "排班"},
+    {action: "cancel", label: "取消", data: () => promptValue("取消原因", "计划调整", v => ({cancel_reason: v}))},
+  ],
+  scheduled: [
+    {action: "confirm_window", label: "确认窗口"},
+    {action: "cancel", label: "取消", data: () => promptValue("取消原因", "计划调整", v => ({cancel_reason: v}))},
+  ],
+  waiting: [
+    {action: "schedule", label: "重新排班"},
+    {action: "cancel", label: "取消", data: () => promptValue("取消原因", "计划调整", v => ({cancel_reason: v}))},
+  ],
+  window_confirmed: [
+    {action: "berth", label: "靠泊", data: () => promptValue("实际吃水(米)", "10.3", v => ({actual_draft_m: parseFloat(v)}))},
+  ],
+  berthed: [
+    {action: "depart", label: "离港", data: () => ({cargo_operation_complete: confirm("确认货物作业已完成？")})},
+  ],
+};
+
+function promptValue(question, fallback, wrap) {
+  const value = prompt(question, fallback);
+  return value === null ? null : wrap(value);
+}
+
+function renderRecords() {
+  const tbody = document.querySelector("#records-table tbody");
+  tbody.innerHTML = "";
+  records.forEach(r => {
+    const p = r.payload;
+    const tr = document.createElement("tr");
+    const windowText = p.window_start_hour != null
+      ? fmtWindow(p.window_start_hour, p.window_end_hour) + (p.window_adjusted ? "（已调整）" : "")
+      : "—";
+    tr.innerHTML = "<td>" + r.id + "</td><td>" + r.reference + "</td><td>" + p.vessel +
+      (p.dangerous_goods ? ' <span class="danger">危</span>' : "") + "</td><td>" + p.berth + "</td><td>" + p.draft_m +
+      "</td><td>" + fmtHour(p.transit_hour) + "</td><td>" + windowText + "</td><td>" + (STATE_LABELS[r.state] || r.state) + "</td>";
+    const td = document.createElement("td");
+    (ACTIONS[r.state] || []).forEach(spec => {
+      const btn = document.createElement("button");
+      btn.textContent = spec.label;
+      btn.onclick = async () => {
+        const data = spec.data ? spec.data() : {};
+        if (data === null) return;
+        await act(r.id, r.version, spec.action, data);
+      };
+      td.appendChild(btn);
+    });
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  });
+}
+
+async function act(id, version, action, data) {
+  try {
+    await api("/api/records/" + id + "/actions/" + action, {
+      method: "POST",
+      body: JSON.stringify({expected_version: version, data: data || {}}),
+    });
+    showMessage("操作成功：" + action);
+  } catch (e) {
+    showMessage("操作失败：" + e.message);
+  }
+  await refresh();
+}
+
+document.getElementById("create-form").onsubmit = async e => {
+  e.preventDefault();
+  const val = id => document.getElementById(id).value;
+  const data = {
+    vessel: val("f-vessel"), berth: val("f-berth"),
+    vessel_length_m: parseFloat(val("f-vlen")), berth_length_m: parseFloat(val("f-blen")),
+    draft_m: parseFloat(val("f-draft")), berth_depth_m: parseFloat(val("f-bdepth")),
+    eta_hour: parseInt(val("f-eta"), 10), etd_hour: parseInt(val("f-etd"), 10),
+    transit_hour: parseInt(val("f-transit"), 10),
+    risk_level: val("f-risk"),
+    dangerous_goods: document.getElementById("f-dangerous").checked,
+    dangerous_class: val("f-dclass"),
+  };
+  try {
+    await api("/api/records", {method: "POST", body: JSON.stringify({reference: val("f-reference"), data})});
+    showMessage("计划已创建");
+  } catch (err) {
+    showMessage("创建失败：" + err.message);
+  }
+  await refresh();
+};
+
+document.getElementById("draft-input").oninput = () => { if (board) renderTides(); };
+refresh().catch(e => showMessage("加载失败：" + e.message));
 </script>
 </body>
 </html>

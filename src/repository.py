@@ -11,6 +11,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# 仍占用航道的计划状态（离港或取消即释放）
+CHANNEL_HOLDING_STATES = ("scheduled", "window_confirmed", "berthed")
+
+
 class Repository:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -90,6 +94,19 @@ class Repository:
                 rows = connection.execute("SELECT * FROM records WHERE state=? ORDER BY id DESC LIMIT ?", (state, limit)).fetchall()
             else:
                 rows = connection.execute("SELECT * FROM records ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [self._row(row) for row in rows]
+
+    def list_channel_bookings(self, exclude_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """仍占用航道的计划（已排窗、窗口已确认、已靠泊）。"""
+        placeholders = ",".join("?" for _ in CHANNEL_HOLDING_STATES)
+        sql = "SELECT * FROM records WHERE state IN (%s)" % placeholders
+        params: List[Any] = list(CHANNEL_HOLDING_STATES)
+        if exclude_id is not None:
+            sql += " AND id != ?"
+            params.append(int(exclude_id))
+        sql += " ORDER BY id"
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
         return [self._row(row) for row in rows]
 
     def mutate(self, record_id: int, expected_version: int, state: str, payload: Dict[str, Any], actor_id: str, action: str, details: Dict[str, Any]) -> Dict[str, Any]:

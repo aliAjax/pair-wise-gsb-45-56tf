@@ -76,6 +76,21 @@ def make_handler(service: Any, static_dir: Path):
                     records = service.list_records(self._actor(), state=query.get("state", [None])[0], limit=int(query.get("limit", ["100"])[0]))
                     self._send(200, {"items": records})
                     return
+                if parsed.path == "/api/tides":
+                    query = parse_qs(parsed.query)
+                    draft = None
+                    if query.get("draft"):
+                        try:
+                            draft = float(query["draft"][0])
+                        except ValueError as exc:
+                            raise ValidationError("draft必须是数字") from exc
+                        if draft <= 0:
+                            raise ValidationError("draft必须大于0")
+                    self._send(200, service.tide_table_view(self._actor(), draft=draft))
+                    return
+                if parsed.path == "/api/channel":
+                    self._send(200, service.channel_board(self._actor()))
+                    return
                 match = RECORD_RE.match(parsed.path)
                 if match:
                     self._send(200, service.get_record(self._actor(), int(match.group(1))))
